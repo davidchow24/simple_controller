@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 
 /// [BuildContext] extension to use [SimpleController].
@@ -11,6 +13,7 @@ extension SimpleControllerBuildContextExtension on BuildContext {
 /// An extension on [SimpleController] that provides a [build] method for creating
 /// a widget that listens to changes in the controller's state and rebuilds accordingly.
 extension SimpleSimpleControllerExtension<N extends SimpleController> on N {
+  /// Create a widget that listens to changes in the controller's state and rebuilds accordingly.
   Widget build<S>({
     required S Function(N value) select,
     Function(S prev, S next)? listen,
@@ -40,6 +43,181 @@ class SimpleControllerDependency<T, N extends SimpleController> {
   final bool fireImmediately;
 }
 
+/// A command class that executes a callback function with debounce and throttle options.
+class SimpleControllerCommand<Output, Input> {
+  SimpleControllerCommand._({
+    required Map<int, int> executingCountMap,
+    required Map<int, int> debounceCountMap,
+    required Map<int, int> throttleCountMap,
+    required FutureOr<Output> Function(Input) callback,
+    required Duration debounce,
+    required Duration throttle,
+    required bool skipIfExecuting,
+    required void Function() notifyListeners,
+  })  : _executingCountMap = executingCountMap,
+        _debounceCountMap = debounceCountMap,
+        _throttleCountMap = throttleCountMap,
+        _callback = callback,
+        _debounce = debounce,
+        _throttle = throttle,
+        _skipIfExecuting = skipIfExecuting,
+        _notifyListeners = notifyListeners;
+
+  final Map<int, int> _executingCountMap;
+  final Map<int, int> _debounceCountMap;
+  final Map<int, int> _throttleCountMap;
+  final void Function() _notifyListeners;
+  final FutureOr<Output> Function(Input) _callback;
+  final Duration _debounce;
+  final Duration _throttle;
+  final bool _skipIfExecuting;
+
+  int get _key => _callback.hashCode;
+
+  /// Returns true if the command is currently executing.
+  bool get isLoading {
+    return isExecuting || isThrottling;
+  }
+
+  /// Returns true if the command is currently executing.
+  bool get isExecuting {
+    final executingCount = _executingCountMap[_key];
+    return executingCount != null && executingCount > 0;
+  }
+
+  void _incrementExecutingCount() {
+    final executingCount = _executingCountMap[_key] ?? 0;
+    _executingCountMap[_key] = executingCount + 1;
+    if (_executingCountMap[_key] == 1) {
+      _notifyListeners();
+    }
+  }
+
+  void _decrementExecutingCount() {
+    final executingCount = _executingCountMap[_key] ?? 0;
+    _executingCountMap[_key] = executingCount - 1;
+    if (_executingCountMap[_key] == 0) {
+      _notifyListeners();
+    }
+  }
+
+  /// Returns true if the command is currently debouncing.
+  bool get isDebouncing {
+    final debounceCount = _debounceCountMap[_key];
+    return debounceCount != null && debounceCount > 0;
+  }
+
+  void _incrementDebounceCount() {
+    final debounceCount = _debounceCountMap[_key] ?? 0;
+    _debounceCountMap[_key] = debounceCount + 1;
+  }
+
+  void _decrementDebounceCount() {
+    final debounceCount = _debounceCountMap[_key] ?? 0;
+    _debounceCountMap[_key] = debounceCount - 1;
+  }
+
+  /// Returns true if the command is currently throttling.
+  bool get isThrottling {
+    final throttleCount = _throttleCountMap[_key];
+    return throttleCount != null && throttleCount > 0;
+  }
+
+  void _incrementThrottleCount() {
+    final throttleCount = _throttleCountMap[_key] ?? 0;
+    _throttleCountMap[_key] = throttleCount + 1;
+  }
+
+  void _decrementThrottleCount() {
+    final throttleCount = _throttleCountMap[_key] ?? 0;
+    _throttleCountMap[_key] = throttleCount - 1;
+    if (_throttleCountMap[_key] == 0) {
+      _notifyListeners();
+    }
+  }
+
+  Completer<Output?> _completer = Completer<Output?>();
+
+  void _execute({
+    required Input input,
+    required Duration debounce,
+    required Duration throttle,
+    required bool skipIfExecuting,
+  }) async {
+    if (debounce > Duration.zero) {
+      _incrementDebounceCount();
+      Timer(
+        debounce,
+        () {
+          _decrementDebounceCount();
+          if (isDebouncing) {
+            return;
+          }
+          _executeCommand(
+            input: input,
+            skipIfExecuting: skipIfExecuting,
+          );
+        },
+      );
+    } else if (throttle > Duration.zero) {
+      if (isThrottling) {
+        return;
+      }
+      _incrementThrottleCount();
+      _executeCommand(
+        input: input,
+        skipIfExecuting: skipIfExecuting,
+      );
+      Timer(
+        throttle,
+        () {
+          _decrementThrottleCount();
+        },
+      );
+    } else {
+      _executeCommand(
+        input: input,
+        skipIfExecuting: skipIfExecuting,
+      );
+    }
+  }
+
+  void _executeCommand({
+    required Input input,
+    required bool skipIfExecuting,
+  }) async {
+    if (skipIfExecuting && isExecuting) {
+      return;
+    }
+    _incrementExecutingCount();
+    try {
+      final result = await _callback(input);
+      _completer.complete(result);
+    } catch (e) {
+      _completer.completeError(e);
+    } finally {
+      _decrementExecutingCount();
+      if (!isExecuting) {
+        _completer = Completer<Output?>();
+      }
+    }
+  }
+
+  /// Execute the command with the given input.
+  Future<Output?> execute(Input input) {
+    _execute(
+      input: input,
+      debounce: _debounce,
+      throttle: _throttle,
+      skipIfExecuting: _skipIfExecuting,
+    );
+    return _completer.future;
+  }
+}
+
+typedef SimpleControllerCommandCallback<Output, Input> = Future<Output>
+    Function(Input);
+
 /// A controller class that extends [ChangeNotifier] to manage dependencies and notify listeners.
 ///
 /// The [SimpleController] class allows adding dependencies to other controllers and listening
@@ -47,6 +225,29 @@ class SimpleControllerDependency<T, N extends SimpleController> {
 /// and its associated listener.
 class SimpleController extends ChangeNotifier {
   final List<_SimpleControllerState> _states = [];
+
+  final Map<int, int> _executingCountMap = {};
+  final Map<int, int> _debounceCountMap = {};
+  final Map<int, int> _throttleCountMap = {};
+
+  /// Create a [SimpleControllerCommand] with a callback function.
+  SimpleControllerCommand<Output, Input> createCommand<Output, Input>(
+    FutureOr<Output> Function(Input) callback, {
+    Duration debounce = Duration.zero,
+    Duration throttle = Duration.zero,
+    bool skipIfExecuting = true,
+  }) {
+    return SimpleControllerCommand._(
+      executingCountMap: _executingCountMap,
+      debounceCountMap: _debounceCountMap,
+      throttleCountMap: _throttleCountMap,
+      callback: callback,
+      debounce: debounce,
+      throttle: throttle,
+      skipIfExecuting: skipIfExecuting,
+      notifyListeners: notifyListeners,
+    );
+  }
 
   /// Add a dependency to the controller.
   void addDependency<T, N extends SimpleController>({

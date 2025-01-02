@@ -96,7 +96,9 @@ class EnvController extends SimpleController {
   Env _env = Env.dev;
   Env get env => _env;
 
-  void setEnv(Env? env) {
+  SimpleControllerCommand<void, Env?> get setEnv => createCommand(_setEnv);
+
+  void _setEnv(Env? env) {
     if (env == null) {
       return;
     }
@@ -146,7 +148,9 @@ class MainApp extends StatelessWidget {
           ),
         ),
       ],
-      child: ...,
+      child: MaterialApp(
+        ...
+      ),
     );
   }
 }

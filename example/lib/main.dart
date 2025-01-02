@@ -12,7 +12,9 @@ class EnvController extends SimpleController {
   Env _env = Env.dev;
   Env get env => _env;
 
-  void setEnv(Env? env) {
+  SimpleControllerCommand<void, Env?> get setEnv => createCommand(_setEnv);
+
+  void _setEnv(Env? env) {
     if (env == null) {
       return;
     }
@@ -87,7 +89,11 @@ class HomePageController extends SimpleController {
   List<int> _counts = [];
   List<int> get counts => _counts;
 
-  void increment(int index) {
+  SimpleControllerCommand<void, int> get increment => createCommand(_increment);
+
+  void _increment(int index) async {
+    // Simulate network request
+    await Future.delayed(Duration(milliseconds: 200));
     _counts[index]++;
     notifyListeners();
   }
@@ -114,29 +120,13 @@ class MainApp extends StatelessWidget {
         ),
       ],
       child: MaterialApp(
-        home: HomePageProvider(
+        home: SimpleControllerProvider(
+          create: (context) => HomePageController(
+            mainAppController: context.use(),
+          ),
           child: HomePage(),
         ),
       ),
-    );
-  }
-}
-
-class HomePageProvider extends StatelessWidget {
-  const HomePageProvider({
-    required this.child,
-    super.key,
-  });
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return SimpleControllerProvider(
-      create: (context) => HomePageController(
-        mainAppController: context.use(),
-      ),
-      child: child,
     );
   }
 }
@@ -165,7 +155,7 @@ class HomePage extends StatelessWidget {
                     child: Text(env.name),
                   ),
               ],
-              onChanged: envController.setEnv,
+              onChanged: envController.setEnv.execute,
             ),
           ),
           SizedBox(width: 8.0),
@@ -210,12 +200,17 @@ class HomePage extends StatelessWidget {
           children: [
             for (var i = 0; i < value; i++) ...[
               if (i > 0) const SizedBox(height: 8.0),
-              FilledButton.icon(
-                onPressed: () {
-                  homePageController.increment(i);
+              homePageController.build(
+                select: (value) => value.increment.isLoading,
+                builder: (context, value) {
+                  return FilledButton.icon(
+                    onPressed: value
+                        ? null
+                        : () => homePageController.increment.execute(i),
+                    icon: Icon(Icons.add),
+                    label: Text('count${i + 1}'),
+                  );
                 },
-                icon: Icon(Icons.add),
-                label: Text('count${i + 1}'),
               ),
             ],
           ],

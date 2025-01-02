@@ -1,3 +1,7 @@
+## 1.2.0
+
+Add "createCommand" to "SimpleController"
+
 ## 1.1.0
 
 Add "addDependency" to "SimpleController"
