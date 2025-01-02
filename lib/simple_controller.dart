@@ -75,11 +75,6 @@ class SimpleControllerCommand<Output, Input> {
   int get _key => _callback.hashCode;
 
   /// Returns true if the command is currently executing.
-  bool get isLoading {
-    return isExecuting || isThrottling;
-  }
-
-  /// Returns true if the command is currently executing.
   bool get isExecuting {
     final executingCount = _executingCountMap[_key];
     return executingCount != null && executingCount > 0;

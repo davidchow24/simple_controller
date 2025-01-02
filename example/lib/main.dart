@@ -201,7 +201,7 @@ class HomePage extends StatelessWidget {
             for (var i = 0; i < value; i++) ...[
               if (i > 0) const SizedBox(height: 8.0),
               homePageController.build(
-                select: (value) => value.increment.isLoading,
+                select: (value) => value.increment.isExecuting,
                 builder: (context, value) {
                   return FilledButton.icon(
                     onPressed: value
