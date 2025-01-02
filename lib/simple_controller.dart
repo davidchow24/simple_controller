@@ -1,29 +1,16 @@
 import 'package:flutter/widgets.dart';
 
-/// [BuildContext] extension to use [SimpleControllerProvider] and [SimpleControllerDependency].
+/// [BuildContext] extension to use [SimpleController].
 extension SimpleControllerBuildContextExtension on BuildContext {
   /// Get the controller from the [SimpleControllerProvider] in the context.
-  N use<N extends ChangeNotifier>() {
+  N use<N extends SimpleController>() {
     return SimpleControllerProvider._of<N>(this);
-  }
-
-  /// Create a [SimpleControllerDependency] widget to listen to the controller.
-  SimpleControllerDependency dependency<N extends ChangeNotifier, S>({
-    required S Function(N value) select,
-    required void Function(S prev, S next)? listen,
-  }) {
-    return SimpleControllerDependency<N, S>(
-      controller: use(),
-      select: select,
-      listen: listen,
-    );
   }
 }
 
-/// [ChangeNotifier] extension to use [SimpleControllerDependency].
-extension SimpleControllerChangeNotifierExtension<N extends ChangeNotifier>
-    on N {
-  /// Create a [SimpleControllerDependency] widget to listen to the controller.
+/// An extension on [SimpleController] that provides a [build] method for creating
+/// a widget that listens to changes in the controller's state and rebuilds accordingly.
+extension SimpleSimpleControllerExtension<N extends SimpleController> on N {
   Widget build<S>({
     required S Function(N value) select,
     Function(S prev, S next)? listen,
@@ -38,47 +25,90 @@ extension SimpleControllerChangeNotifierExtension<N extends ChangeNotifier>
   }
 }
 
-/// [SimpleControllerDependency] is a widget that listens to a [ChangeNotifier] and rebuilds when the value changes.
-class SimpleControllerDependency<N extends ChangeNotifier, T>
-    extends StatelessWidget {
+/// A dependency class that holds a controller, a selector function, a listener function,
+class SimpleControllerDependency<T, N extends SimpleController> {
   const SimpleControllerDependency({
     required this.controller,
     required this.select,
     required this.listen,
-    Key? key,
-  }) : super(key: key);
+    this.fireImmediately = true,
+  });
 
-  /// The [ChangeNotifier] to listen to.
   final N controller;
-
-  /// The function to select the value from the [ChangeNotifier].
   final T Function(N value) select;
+  final void Function(T prev, T next) listen;
+  final bool fireImmediately;
+}
 
-  /// The function to listen to the value changes.
-  final void Function(T prev, T next)? listen;
+/// A controller class that extends [ChangeNotifier] to manage dependencies and notify listeners.
+///
+/// The [SimpleController] class allows adding dependencies to other controllers and listening
+/// to changes in their selected values. It maintains a list of states, each representing a dependency
+/// and its associated listener.
+class SimpleController extends ChangeNotifier {
+  final List<_SimpleControllerState> _states = [];
 
-  @override
-  Widget build(BuildContext context) {
-    return _SimpleControllerSelector(
-      controller: controller,
-      select: select,
-      listen: listen,
-      builder: (context, value) => SizedBox.shrink(),
+  /// Add a dependency to the controller.
+  void addDependency<T, N extends SimpleController>({
+    required N controller,
+    required T Function(N value) select,
+    required void Function(T prev, T next) listen,
+    bool fireImmediately = true,
+  }) {
+    final index = _states.length;
+
+    final selectedValue = select(controller);
+
+    final listener = () {
+      final prev = _states[index].value;
+      final next = select(controller);
+      if (prev != next) {
+        _states[index].value = next;
+        listen(prev, next);
+      }
+    };
+
+    _states.add(
+      _SimpleControllerState(
+        dependency: SimpleControllerDependency<T, N>(
+          controller: controller,
+          select: select,
+          listen: listen,
+          fireImmediately: fireImmediately,
+        ),
+        listener: listener,
+        value: selectedValue,
+      ),
     );
+
+    controller.addListener(listener);
+
+    if (fireImmediately) {
+      listen(selectedValue, selectedValue);
+    }
+  }
+
+  /// Remove a dependency from the controller.
+  @override
+  void dispose() {
+    for (var i = 0; i < _states.length; i++) {
+      final state = _states[i];
+      state.dependency.controller.removeListener(state.listener);
+    }
+    super.dispose();
   }
 }
 
-/// [SimpleControllerProvider] is a widget that provides a [ChangeNotifier] to its children.
-class SimpleControllerProvider<N extends ChangeNotifier>
+/// [SimpleControllerProvider] is a widget that provides a [SimpleController] to its children.
+class SimpleControllerProvider<N extends SimpleController>
     extends StatefulWidget {
   const SimpleControllerProvider({
     required this.create,
     this.child,
-    this.dependencies,
     Key? key,
   }) : super(key: key);
 
-  /// Create a [SimpleControllerProvider] widget that provides a [ChangeNotifier] to its children.
+  /// Create a [SimpleControllerProvider] widget that provides a [SimpleController] to its children.
   static Widget multi({
     required List<SimpleControllerProvider> providers,
     required Widget child,
@@ -92,32 +122,25 @@ class SimpleControllerProvider<N extends ChangeNotifier>
     return result;
   }
 
-  SimpleControllerProvider<N> _wrapWith<T extends ChangeNotifier>({
+  SimpleControllerProvider<N> _wrapWith<T extends SimpleController>({
     required Widget? child,
   }) {
     return SimpleControllerProvider<N>(
       create: create,
-      dependencies: dependencies,
       child: child,
     );
   }
 
-  static N _of<N extends ChangeNotifier>(BuildContext context) {
+  static N _of<N extends SimpleController>(BuildContext context) {
     return context
         .findAncestorStateOfType<_SimpleControllerProviderState<N>>()!
         ._controller;
   }
 
-  /// The function to create the [ChangeNotifier].
+  /// The function to create the [SimpleController].
   final N Function(BuildContext context) create;
 
-  /// The function to get the dependencies of the [ChangeNotifier].
-  final List<SimpleControllerDependency> Function(
-    BuildContext context,
-    N controller,
-  )? dependencies;
-
-  /// The child widget to wrap with the [ChangeNotifier].
+  /// The child widget to wrap with the [SimpleController].
   final Widget? child;
 
   @override
@@ -125,7 +148,7 @@ class SimpleControllerProvider<N extends ChangeNotifier>
       _SimpleControllerProviderState<N>();
 }
 
-class _SimpleControllerProviderState<N extends ChangeNotifier>
+class _SimpleControllerProviderState<N extends SimpleController>
     extends State<SimpleControllerProvider<N>> {
   late final N _controller = widget.create(context);
 
@@ -137,24 +160,11 @@ class _SimpleControllerProviderState<N extends ChangeNotifier>
 
   @override
   Widget build(BuildContext context) {
-    final dependencies = widget.dependencies?.call(context, _controller);
-    final child = widget.child ?? const SizedBox.shrink();
-
-    if (dependencies != null) {
-      return Stack(
-        textDirection: TextDirection.ltr,
-        children: [
-          for (final dependency in dependencies) dependency,
-          child,
-        ],
-      );
-    }
-
-    return child;
+    return widget.child ?? SizedBox.shrink();
   }
 }
 
-class _SimpleControllerSelector<T, N extends ChangeNotifier>
+class _SimpleControllerSelector<T, N extends SimpleController>
     extends StatefulWidget {
   const _SimpleControllerSelector({
     required this.controller,
@@ -174,7 +184,7 @@ class _SimpleControllerSelector<T, N extends ChangeNotifier>
       _SimpleControllerSelectorState<T, N>();
 }
 
-class _SimpleControllerSelectorState<T, N extends ChangeNotifier>
+class _SimpleControllerSelectorState<T, N extends SimpleController>
     extends State<_SimpleControllerSelector<T, N>> {
   late T _value = widget.select(widget.controller);
 
@@ -208,4 +218,16 @@ class _SimpleControllerSelectorState<T, N extends ChangeNotifier>
   Widget build(BuildContext context) {
     return widget.builder(context, _value);
   }
+}
+
+class _SimpleControllerState<T> {
+  _SimpleControllerState({
+    required this.dependency,
+    required this.listener,
+    required this.value,
+  });
+
+  final SimpleControllerDependency dependency;
+  final void Function() listener;
+  T value;
 }

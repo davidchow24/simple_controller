@@ -8,7 +8,7 @@ enum Env {
   prod,
 }
 
-class EnvController extends ChangeNotifier {
+class EnvController extends SimpleController {
   Env _env = Env.dev;
   Env get env => _env;
 
@@ -21,27 +21,25 @@ class EnvController extends ChangeNotifier {
   }
 }
 
-class MainAppController extends ChangeNotifier {
+class MainAppController extends SimpleController {
   MainAppController({
     required EnvController envController,
   }) {
-    load(
-      env: envController.env,
+    addDependency(
+      controller: envController,
+      select: (value) => value.env,
+      listen: _envControllerEnvListener,
     );
   }
 
-  void load({
-    Env? env,
-  }) {
-    if (env != null) {
-      _countLength = switch (env) {
-        Env.dev => 3,
-        Env.uat => 2,
-        Env.stg => 1,
-        Env.prod => 0,
-      };
-      notifyListeners();
-    }
+  void _envControllerEnvListener(Env prev, Env next) {
+    _countLength = switch (next) {
+      Env.dev => 3,
+      Env.uat => 2,
+      Env.stg => 1,
+      Env.prod => 0,
+    };
+    notifyListeners();
   }
 
   final int maxCountLength = 3;
@@ -70,22 +68,19 @@ class MainAppController extends ChangeNotifier {
   }
 }
 
-class HomePageController extends ChangeNotifier {
+class HomePageController extends SimpleController {
   HomePageController({
     required MainAppController mainAppController,
   }) {
-    load(
-      countLength: mainAppController.countLength,
+    addDependency(
+      controller: mainAppController,
+      select: (value) => value.countLength,
+      listen: _mainAppControllerCountLengthListener,
     );
   }
 
-  void load({
-    int? countLength,
-  }) {
-    _counts = List.generate(
-      countLength ?? _counts.length,
-      (index) => _counts.elementAtOrNull(index) ?? 0,
-    );
+  void _mainAppControllerCountLengthListener(int prev, int next) {
+    _counts = List.generate(next, (i) => _counts.elementAtOrNull(i) ?? 0);
     notifyListeners();
   }
 
@@ -116,14 +111,6 @@ class MainApp extends StatelessWidget {
           create: (context) => MainAppController(
             envController: context.use(),
           ),
-          dependencies: (context, controller) => [
-            context.dependency(
-              select: (EnvController value) => value.env,
-              listen: (prev, next) => controller.load(
-                env: next,
-              ),
-            ),
-          ],
         ),
       ],
       child: MaterialApp(
@@ -149,14 +136,6 @@ class HomePageProvider extends StatelessWidget {
       create: (context) => HomePageController(
         mainAppController: context.use(),
       ),
-      dependencies: (context, controller) => [
-        context.dependency(
-          select: (MainAppController value) => value.countLength,
-          listen: (prev, next) => controller.load(
-            countLength: next,
-          ),
-        ),
-      ],
       child: child,
     );
   }
@@ -212,13 +191,14 @@ class HomePage extends StatelessWidget {
           select: (value) => value.counts.length,
           builder: (context, value) => Column(
             mainAxisSize: MainAxisSize.min,
-            spacing: 8.0,
             children: [
-              for (var i = 0; i < value; i++)
+              for (var i = 0; i < value; i++) ...[
+                if (i > 0) const SizedBox(height: 8.0),
                 homePageController.build(
                   select: (value) => value.counts.elementAtOrNull(i),
                   builder: (context, value) => Text('count${i + 1}: $value'),
                 ),
+              ],
             ],
           ),
         ),
@@ -227,9 +207,9 @@ class HomePage extends StatelessWidget {
         select: (value) => value.counts.length,
         builder: (context, value) => Column(
           mainAxisSize: MainAxisSize.min,
-          spacing: 8.0,
           children: [
-            for (var i = 0; i < value; i++)
+            for (var i = 0; i < value; i++) ...[
+              if (i > 0) const SizedBox(height: 8.0),
               FilledButton.icon(
                 onPressed: () {
                   homePageController.increment(i);
@@ -237,6 +217,7 @@ class HomePage extends StatelessWidget {
                 icon: Icon(Icons.add),
                 label: Text('count${i + 1}'),
               ),
+            ],
           ],
         ),
       ),

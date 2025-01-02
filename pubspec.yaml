@@ -1,6 +1,6 @@
 name: simple_controller
 description: "A wrapper around StatefulWidget to make them easier to use and more reusable."
-version: 1.0.0
+version: 1.1.0
 homepage: https://github.com/davidchow24/simple_controller
 
 environment:

@@ -14,11 +14,15 @@ A lightweight and efficient state management solution for Flutter applications.
 
 ### Key Components
 
+### SimpleController
+
+A controller class that extends ChangeNotifier to manage dependencies and notify listeners.
+
 #### SimpleControllerProvider
 
 A widget that provides a single controller instance to its descendants. Use this when you need to provide a single controller to a widget subtree.
 
-#### SimpleControllerProvider.multi 
+#### SimpleControllerProvider.multi
 
 A widget that allows providing multiple controllers at once. Useful when you need to provide several controllers that work together.
 
@@ -33,12 +37,12 @@ A method to efficiently rebuild widgets when specific controller state changes. 
 ### Basic Example
 
 ```dart
-class CounterController extends ChangeNotifier {
+class CounterController extends SimpleController {
   int count = 0;
 
   void increment() {
     count++;
-    notifyListeners(); // Notify listeners
+    notifyListeners();
   }
 }
 
@@ -88,7 +92,7 @@ class CounterButton extends StatelessWidget {
 For more complex state management scenarios, you can:
 
 ```dart
-class EnvController extends ChangeNotifier {
+class EnvController extends SimpleController {
   Env _env = Env.dev;
   Env get env => _env;
 
@@ -101,27 +105,25 @@ class EnvController extends ChangeNotifier {
   }
 }
 
-class MainAppController extends ChangeNotifier {
+class MainAppController extends SimpleController {
   MainAppController({
     required EnvController envController,
   }) {
-    load(
-      env: envController.env,
+    addDependency(
+      controller: envController,
+      select: (value) => value.env,
+      listen: _envControllerEnvListener,
     );
   }
 
-  void load({
-    Env? env,
-  }) {
-    if (env != null) {
-      _countLength = switch (env) {
-        Env.dev => 3,
-        Env.uat => 2,
-        Env.stg => 1,
-        Env.prod => 0,
-      };
-      notifyListeners();
-    }
+  void _envControllerEnvListener(Env prev, Env next) {
+    _countLength = switch (next) {
+      Env.dev => 3,
+      Env.uat => 2,
+      Env.stg => 1,
+      Env.prod => 0,
+    };
+    notifyListeners();
   }
 
   int _countLength = 1;
@@ -142,14 +144,6 @@ class MainApp extends StatelessWidget {
           create: (context) => MainAppController(
             envController: context.use(),
           ),
-          dependencies: (context, controller) => [
-            context.dependency(
-              select: (EnvController value) => value.env,
-              listen: (prev, next) => controller.load(
-                env: next,
-              ),
-            ),
-          ],
         ),
       ],
       child: ...,
