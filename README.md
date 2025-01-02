@@ -103,7 +103,6 @@ class EnvController extends SimpleController {
       return;
     }
     _env = env;
-    notifyListeners();
   }
 }
 

@@ -1,3 +1,7 @@
+## 1.3.1
+
+Update readme and example
+
 ## 1.3.0
 
 Remove "isLoading" in "SimpleControllerCommand"

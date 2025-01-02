@@ -12,14 +12,14 @@ class EnvController extends SimpleController {
   Env _env = Env.dev;
   Env get env => _env;
 
-  SimpleControllerCommand<void, Env?> get setEnv => createCommand(_setEnv);
+  SimpleControllerCommand<void, Env?> get updateEnv =>
+      createCommand(_updateEnv);
 
-  void _setEnv(Env? env) {
+  void _updateEnv(Env? env) {
     if (env == null) {
       return;
     }
     _env = env;
-    notifyListeners();
   }
 }
 
@@ -53,20 +53,28 @@ class MainAppController extends SimpleController {
 
   bool get isMinCountLength => _countLength <= 0;
 
-  void incrementCountLength() {
+  SimpleControllerCommand<void, Null> get incrementCountLength =>
+      createCommand(_incrementCountLength);
+
+  void _incrementCountLength(Null _) async {
     if (isMaxCountLength) {
       return;
     }
+    // Simulate async operation
+    await Future.delayed(Duration(milliseconds: 300));
     _countLength++;
-    notifyListeners();
   }
 
-  void decrementCountLength() {
+  SimpleControllerCommand<void, Null> get decrementCountLength =>
+      createCommand(_decrementCountLength);
+
+  void _decrementCountLength(Null _) async {
     if (isMinCountLength) {
       return;
     }
+    // Simulate async operation
+    await Future.delayed(Duration(milliseconds: 300));
     _countLength--;
-    notifyListeners();
   }
 }
 
@@ -91,11 +99,8 @@ class HomePageController extends SimpleController {
 
   SimpleControllerCommand<void, int> get increment => createCommand(_increment);
 
-  void _increment(int index) async {
-    // Simulate network request
-    await Future.delayed(Duration(milliseconds: 200));
+  void _increment(int index) {
     _counts[index]++;
-    notifyListeners();
   }
 }
 
@@ -146,32 +151,48 @@ class HomePage extends StatelessWidget {
         actions: [
           envController.build(
             select: (value) => value.env,
-            builder: (context, value) => DropdownButton(
-              value: value,
-              items: [
-                for (final env in Env.values)
-                  DropdownMenuItem(
-                    value: env,
-                    child: Text(env.name),
-                  ),
-              ],
-              onChanged: envController.setEnv.execute,
-            ),
+            builder: (context, env) {
+              return DropdownButton(
+                value: env,
+                items: [
+                  for (final value in Env.values)
+                    DropdownMenuItem(
+                      value: value,
+                      child: Text(value.name),
+                    ),
+                ],
+                onChanged: envController.updateEnv.execute,
+              );
+            },
           ),
           SizedBox(width: 8.0),
           mainAppController.build(
             select: (value) => value.isMinCountLength,
-            builder: (context, value) => IconButton(
-              onPressed: value ? null : mainAppController.decrementCountLength,
-              icon: Icon(Icons.remove),
+            builder: (context, isMinCountLength) => mainAppController.build(
+              select: (value) => value.decrementCountLength.isExecuting,
+              builder: (context, isExecuting) => IconButton(
+                onPressed: isMinCountLength || isExecuting
+                    ? null
+                    : () {
+                        mainAppController.decrementCountLength.execute(null);
+                      },
+                icon: Icon(Icons.remove),
+              ),
             ),
           ),
           SizedBox(width: 8.0),
           mainAppController.build(
             select: (value) => value.isMaxCountLength,
-            builder: (context, value) => IconButton(
-              onPressed: value ? null : mainAppController.incrementCountLength,
-              icon: Icon(Icons.add),
+            builder: (context, isMaxCountLength) => mainAppController.build(
+              select: (value) => value.incrementCountLength.isExecuting,
+              builder: (context, isExecuting) => IconButton(
+                onPressed: isMaxCountLength || isExecuting
+                    ? null
+                    : () {
+                        mainAppController.incrementCountLength.execute(null);
+                      },
+                icon: Icon(Icons.add),
+              ),
             ),
           ),
         ],
@@ -179,14 +200,16 @@ class HomePage extends StatelessWidget {
       body: Center(
         child: homePageController.build(
           select: (value) => value.counts.length,
-          builder: (context, value) => Column(
+          builder: (context, length) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              for (var i = 0; i < value; i++) ...[
+              for (var i = 0; i < length; i++) ...[
                 if (i > 0) const SizedBox(height: 8.0),
                 homePageController.build(
                   select: (value) => value.counts.elementAtOrNull(i),
-                  builder: (context, value) => Text('count${i + 1}: $value'),
+                  builder: (context, value) {
+                    return Text('count${i + 1}: $value');
+                  },
                 ),
               ],
             ],
@@ -195,26 +218,23 @@ class HomePage extends StatelessWidget {
       ),
       floatingActionButton: homePageController.build(
         select: (value) => value.counts.length,
-        builder: (context, value) => Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (var i = 0; i < value; i++) ...[
-              if (i > 0) const SizedBox(height: 8.0),
-              homePageController.build(
-                select: (value) => value.increment.isExecuting,
-                builder: (context, value) {
-                  return FilledButton.icon(
-                    onPressed: value
-                        ? null
-                        : () => homePageController.increment.execute(i),
-                    icon: Icon(Icons.add),
-                    label: Text('count${i + 1}'),
-                  );
-                },
-              ),
+        builder: (context, length) {
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < length; i++) ...[
+                if (i > 0) const SizedBox(height: 8.0),
+                FilledButton.icon(
+                  onPressed: () {
+                    homePageController.increment.execute(i);
+                  },
+                  icon: Icon(Icons.add),
+                  label: Text('count${i + 1}'),
+                ),
+              ],
             ],
-          ],
-        ),
+          );
+        },
       ),
     );
   }

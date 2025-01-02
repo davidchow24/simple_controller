@@ -46,15 +46,17 @@ class SimpleControllerDependency<T, N extends SimpleController> {
 /// A command class that executes a callback function with debounce and throttle options.
 class SimpleControllerCommand<Output, Input> {
   SimpleControllerCommand._({
-    required Map<int, int> executingCountMap,
-    required Map<int, int> debounceCountMap,
-    required Map<int, int> throttleCountMap,
+    required String? key,
+    required Map<String, int> executingCountMap,
+    required Map<String, int> debounceCountMap,
+    required Map<String, int> throttleCountMap,
     required FutureOr<Output> Function(Input) callback,
     required Duration debounce,
     required Duration throttle,
     required bool skipIfExecuting,
     required void Function() notifyListeners,
-  })  : _executingCountMap = executingCountMap,
+  })  : _key = key ?? callback.hashCode.toString(),
+        _executingCountMap = executingCountMap,
         _debounceCountMap = debounceCountMap,
         _throttleCountMap = throttleCountMap,
         _callback = callback,
@@ -63,16 +65,15 @@ class SimpleControllerCommand<Output, Input> {
         _skipIfExecuting = skipIfExecuting,
         _notifyListeners = notifyListeners;
 
-  final Map<int, int> _executingCountMap;
-  final Map<int, int> _debounceCountMap;
-  final Map<int, int> _throttleCountMap;
+  final String _key;
+  final Map<String, int> _executingCountMap;
+  final Map<String, int> _debounceCountMap;
+  final Map<String, int> _throttleCountMap;
   final void Function() _notifyListeners;
   final FutureOr<Output> Function(Input) _callback;
   final Duration _debounce;
   final Duration _throttle;
   final bool _skipIfExecuting;
-
-  int get _key => _callback.hashCode;
 
   /// Returns true if the command is currently executing.
   bool get isExecuting {
@@ -221,18 +222,20 @@ typedef SimpleControllerCommandCallback<Output, Input> = Future<Output>
 class SimpleController extends ChangeNotifier {
   final List<_SimpleControllerState> _states = [];
 
-  final Map<int, int> _executingCountMap = {};
-  final Map<int, int> _debounceCountMap = {};
-  final Map<int, int> _throttleCountMap = {};
+  final Map<String, int> _executingCountMap = {};
+  final Map<String, int> _debounceCountMap = {};
+  final Map<String, int> _throttleCountMap = {};
 
   /// Create a [SimpleControllerCommand] with a callback function.
   SimpleControllerCommand<Output, Input> createCommand<Output, Input>(
     FutureOr<Output> Function(Input) callback, {
+    String? key,
     Duration debounce = Duration.zero,
     Duration throttle = Duration.zero,
     bool skipIfExecuting = true,
   }) {
     return SimpleControllerCommand._(
+      key: key,
       executingCountMap: _executingCountMap,
       debounceCountMap: _debounceCountMap,
       throttleCountMap: _throttleCountMap,
