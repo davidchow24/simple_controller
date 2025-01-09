@@ -1,3 +1,7 @@
+## 1.4.0
+
+Add "createState" to "SimpleController"
+
 ## 1.3.1
 
 Update readme and example

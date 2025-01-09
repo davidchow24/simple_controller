@@ -16,21 +16,53 @@ extension SimpleSimpleControllerExtension<N extends SimpleController> on N {
   /// Create a widget that listens to changes in the controller's state and rebuilds accordingly.
   Widget build<S>({
     required S Function(N value) select,
+    required Widget Function(
+      BuildContext context,
+      S value,
+      Widget? child,
+    ) builder,
     Function(S prev, S next)? listen,
-    required Widget Function(BuildContext context, S value) builder,
+    Widget? child,
   }) {
     return _SimpleControllerSelector(
       controller: this,
       select: select,
       listen: listen,
       builder: builder,
+      child: child,
     );
   }
 }
 
+class SimpleControllerState<T> {
+  const SimpleControllerState({
+    required T Function() getState,
+    required SimpleControllerCommand<void, T> setState,
+  })  : _getState = getState,
+        _setState = setState;
+
+  final T Function() _getState;
+
+  final SimpleControllerCommand<void, T> _setState;
+
+  T get value => _getState();
+
+  set value(T value) {
+    _setState.execute(value);
+  }
+
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is SimpleControllerState<T> && other.value == value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+}
+
 /// A dependency class that holds a controller, a selector function, a listener function,
-class SimpleControllerDependency<T, N extends SimpleController> {
-  const SimpleControllerDependency({
+class _SimpleControllerDependency<T, N extends SimpleController> {
+  const _SimpleControllerDependency({
     required this.controller,
     required this.select,
     required this.listen,
@@ -93,6 +125,7 @@ class SimpleControllerCommand<Output, Input> {
     final executingCount = _executingCountMap[_key] ?? 0;
     _executingCountMap[_key] = executingCount - 1;
     if (_executingCountMap[_key] == 0) {
+      _executingCountMap.remove(_key);
       _notifyListeners();
     }
   }
@@ -128,6 +161,7 @@ class SimpleControllerCommand<Output, Input> {
     final throttleCount = _throttleCountMap[_key] ?? 0;
     _throttleCountMap[_key] = throttleCount - 1;
     if (_throttleCountMap[_key] == 0) {
+      _throttleCountMap.remove(_key);
       _notifyListeners();
     }
   }
@@ -211,22 +245,40 @@ class SimpleControllerCommand<Output, Input> {
   }
 }
 
-typedef SimpleControllerCommandCallback<Output, Input> = Future<Output>
-    Function(Input);
-
 /// A controller class that extends [ChangeNotifier] to manage dependencies and notify listeners.
 ///
 /// The [SimpleController] class allows adding dependencies to other controllers and listening
 /// to changes in their selected values. It maintains a list of states, each representing a dependency
 /// and its associated listener.
 class SimpleController extends ChangeNotifier {
-  final List<_SimpleControllerState> _states = [];
+  final List<_SimpleControllerDependencyState> _dependencyStates = [];
 
   final Map<String, int> _executingCountMap = {};
   final Map<String, int> _debounceCountMap = {};
   final Map<String, int> _throttleCountMap = {};
 
+  final Map<Key, Object?> _stateMap = {};
+
+  /// Create a [SimpleControllerState] with an initial state.
+  @protected
+  SimpleControllerState<T> createState<T>(T initialState) {
+    final key = UniqueKey();
+
+    void setState(T value) {
+      _stateMap[key] = value;
+      notifyListeners();
+    }
+
+    _stateMap[key] = initialState;
+
+    return SimpleControllerState<T>(
+      getState: () => _stateMap[key] as T,
+      setState: createCommand(setState),
+    );
+  }
+
   /// Create a [SimpleControllerCommand] with a callback function.
+  @protected
   SimpleControllerCommand<Output, Input> createCommand<Output, Input>(
     FutureOr<Output> Function(Input) callback, {
     String? key,
@@ -248,28 +300,30 @@ class SimpleController extends ChangeNotifier {
   }
 
   /// Add a dependency to the controller.
+  @protected
   void addDependency<T, N extends SimpleController>({
     required N controller,
     required T Function(N value) select,
-    required void Function(T prev, T next) listen,
+    required FutureOr<void> Function(T prev, T next) listen,
     bool fireImmediately = true,
   }) {
-    final index = _states.length;
+    final index = _dependencyStates.length;
 
     final selectedValue = select(controller);
 
-    final listener = () {
-      final prev = _states[index].value;
+    final listener = () async {
+      final prev = _dependencyStates[index].value;
       final next = select(controller);
       if (prev != next) {
-        _states[index].value = next;
-        listen(prev, next);
+        _dependencyStates[index].value = next;
+        await listen(prev, next);
+        notifyListeners();
       }
     };
 
-    _states.add(
-      _SimpleControllerState(
-        dependency: SimpleControllerDependency<T, N>(
+    _dependencyStates.add(
+      _SimpleControllerDependencyState(
+        dependency: _SimpleControllerDependency<T, N>(
           controller: controller,
           select: select,
           listen: listen,
@@ -290,8 +344,8 @@ class SimpleController extends ChangeNotifier {
   /// Remove a dependency from the controller.
   @override
   void dispose() {
-    for (var i = 0; i < _states.length; i++) {
-      final state = _states[i];
+    for (var i = 0; i < _dependencyStates.length; i++) {
+      final state = _dependencyStates[i];
       state.dependency.controller.removeListener(state.listener);
     }
     super.dispose();
@@ -368,15 +422,17 @@ class _SimpleControllerSelector<T, N extends SimpleController>
   const _SimpleControllerSelector({
     required this.controller,
     required this.select,
-    this.listen,
     required this.builder,
+    this.listen,
+    this.child,
     Key? key,
   }) : super(key: key);
 
   final N controller;
   final T Function(N value) select;
   final void Function(T prev, T next)? listen;
-  final Widget Function(BuildContext context, T value) builder;
+  final Widget Function(BuildContext context, T value, Widget? child) builder;
+  final Widget? child;
 
   @override
   State<_SimpleControllerSelector<T, N>> createState() =>
@@ -415,18 +471,22 @@ class _SimpleControllerSelectorState<T, N extends SimpleController>
 
   @override
   Widget build(BuildContext context) {
-    return widget.builder(context, _value);
+    return widget.builder(
+      context,
+      _value,
+      widget.child,
+    );
   }
 }
 
-class _SimpleControllerState<T> {
-  _SimpleControllerState({
+class _SimpleControllerDependencyState<T> {
+  _SimpleControllerDependencyState({
     required this.dependency,
     required this.listener,
     required this.value,
   });
 
-  final SimpleControllerDependency dependency;
+  final _SimpleControllerDependency dependency;
   final void Function() listener;
   T value;
 }

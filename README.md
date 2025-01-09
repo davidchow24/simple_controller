@@ -14,9 +14,17 @@ A lightweight and efficient state management solution for Flutter applications.
 
 ### Key Components
 
-### SimpleController
+#### SimpleController
 
 A controller class that extends ChangeNotifier to manage dependencies and notify listeners.
+
+##### createState
+
+A method to create a reactive state variable. It initializes the state with a given value and provides a way to listen for changes. This state can be used within the controller to manage and update the UI efficiently.
+
+##### createCommand
+
+A method to create a command that encapsulates a piece of logic or an action. It can be executed with one parameter and supports features like debouncing. Commands help in organizing and reusing logic within the controller.
 
 #### SimpleControllerProvider
 
@@ -38,12 +46,11 @@ A method to efficiently rebuild widgets when specific controller state changes. 
 
 ```dart
 class CounterController extends SimpleController {
-  int count = 0;
+  late final countState = createState(0);
 
-  void increment() {
-    count++;
-    notifyListeners();
-  }
+  late final increment = createCommand((_) {
+    countState.value++;
+  });
 }
 
 class CounterProvider extends StatelessWidget {
@@ -65,8 +72,8 @@ class CounterWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     final controller = context.use<CounterController>();
     return controller.build(
-      select: (value) => value.count,
-      builder: (context, value) => Text(value.toString()),
+      select: (value) => value.countState.value,
+      builder: (context, value, child) => Text(value.toString()),
     );
   }
 }
@@ -79,7 +86,7 @@ class CounterButton extends StatelessWidget {
     final controller = context.use<CounterController>();
     return TextButton(
       onPressed: () {
-        controller.increment();
+        controller.increment.execute(null);
       },
       child: const Text('Increment'),
     );
@@ -92,43 +99,77 @@ class CounterButton extends StatelessWidget {
 For more complex state management scenarios, you can:
 
 ```dart
-class EnvController extends SimpleController {
-  Env _env = Env.dev;
-  Env get env => _env;
-
-  SimpleControllerCommand<void, Env?> get setEnv => createCommand(_setEnv);
-
-  void _setEnv(Env? env) {
-    if (env == null) {
-      return;
-    }
-    _env = env;
-  }
+class SettingController extends SimpleController {
+  late final localeState = createState(Locale('en', 'US'));
+  late final themeModeState = createState(ThemeMode.system);
+  late final envState = createState(Env.dev);
 }
 
 class MainAppController extends SimpleController {
   MainAppController({
-    required EnvController envController,
+    required SettingController settingController,
   }) {
     addDependency(
-      controller: envController,
-      select: (value) => value.env,
-      listen: _envControllerEnvListener,
+      controller: settingController,
+      select: (value) => value.envState.value,
+      listen: (prev, next) {
+        countLengthState.value = switch (next) {
+          Env.dev => 3,
+          Env.uat => 2,
+          Env.stg => 1,
+          Env.prod => 0,
+        };
+      },
     );
   }
 
-  void _envControllerEnvListener(Env prev, Env next) {
-    _countLength = switch (next) {
-      Env.dev => 3,
-      Env.uat => 2,
-      Env.stg => 1,
-      Env.prod => 0,
-    };
-    notifyListeners();
+  late final countLengthState = createState(0);
+
+  final int maxCountLength = 3;
+
+  bool get isMaxCountLength => countLengthState.value >= maxCountLength;
+
+  bool get isMinCountLength => countLengthState.value <= 0;
+
+  late final incrementCountLength = createCommand((_) {
+    if (isMaxCountLength) {
+      return;
+    }
+    countLengthState.value++;
+  });
+
+  late final decrementCountLength = createCommand((_) {
+    if (isMinCountLength) {
+      return;
+    }
+    countLengthState.value--;
+  });
+}
+
+class HomePageController extends SimpleController {
+  HomePageController({
+    required MainAppController mainAppController,
+  }) {
+    addDependency(
+      controller: mainAppController,
+      select: (value) => value.countLengthState.value,
+      listen: (prev, next) {
+        countsState.value = List.generate(
+          next,
+          (i) => countsState.value.elementAtOrNull(i) ?? 0,
+        );
+      },
+    );
   }
 
-  int _countLength = 1;
-  int get countLength => _countLength;
+  late final countsState = createState(<int>[]);
+
+  late final increment = createCommand(
+    (int index) {
+      countsState.value[index]++;
+    },
+    debounce: const Duration(milliseconds: 100),
+  );
 }
 
 class MainApp extends StatelessWidget {
@@ -138,17 +179,38 @@ class MainApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return SimpleControllerProvider.multi(
       providers: [
-        SimpleControllerProvider<EnvController>(
-          create: (context) => EnvController(),
+        SimpleControllerProvider<SettingController>(
+          create: (context) => SettingController(),
         ),
         SimpleControllerProvider<MainAppController>(
           create: (context) => MainAppController(
-            envController: context.use(),
+            settingController: context.use(),
           ),
         ),
       ],
-      child: MaterialApp(
-        ...
+      child: Builder(
+        builder: (context) {
+          final settingController = context.use<SettingController>();
+          return settingController.build(
+            select: (value) => (
+              locale: value.localeState.value,
+              themeMode: value.themeModeState.value,
+            ),
+            builder: (context, value, child) => MaterialApp(
+              locale: value.locale,
+              themeMode: value.themeMode,
+              theme: ThemeData.light(),
+              darkTheme: ThemeData.dark(),
+              home: child,
+            ),
+            child: SimpleControllerProvider(
+              create: (context) => HomePageController(
+                mainAppController: context.use(),
+              ),
+              child: HomePage(),
+            ),
+          );
+        },
       ),
     );
   }

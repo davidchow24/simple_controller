@@ -8,74 +8,51 @@ enum Env {
   prod,
 }
 
-class EnvController extends SimpleController {
-  Env _env = Env.dev;
-  Env get env => _env;
-
-  SimpleControllerCommand<void, Env?> get updateEnv =>
-      createCommand(_updateEnv);
-
-  void _updateEnv(Env? env) {
-    if (env == null) {
-      return;
-    }
-    _env = env;
-  }
+class SettingController extends SimpleController {
+  late final localeState = createState(Locale('en', 'US'));
+  late final themeModeState = createState(ThemeMode.system);
+  late final envState = createState(Env.dev);
 }
 
 class MainAppController extends SimpleController {
   MainAppController({
-    required EnvController envController,
+    required SettingController settingController,
   }) {
     addDependency(
-      controller: envController,
-      select: (value) => value.env,
-      listen: _envControllerEnvListener,
+      controller: settingController,
+      select: (value) => value.envState.value,
+      listen: (prev, next) {
+        countLengthState.value = switch (next) {
+          Env.dev => 3,
+          Env.uat => 2,
+          Env.stg => 1,
+          Env.prod => 0,
+        };
+      },
     );
   }
 
-  void _envControllerEnvListener(Env prev, Env next) {
-    _countLength = switch (next) {
-      Env.dev => 3,
-      Env.uat => 2,
-      Env.stg => 1,
-      Env.prod => 0,
-    };
-    notifyListeners();
-  }
+  late final countLengthState = createState(0);
 
   final int maxCountLength = 3;
 
-  int _countLength = 1;
-  int get countLength => _countLength;
+  bool get isMaxCountLength => countLengthState.value >= maxCountLength;
 
-  bool get isMaxCountLength => _countLength >= maxCountLength;
+  bool get isMinCountLength => countLengthState.value <= 0;
 
-  bool get isMinCountLength => _countLength <= 0;
-
-  SimpleControllerCommand<void, Null> get incrementCountLength =>
-      createCommand(_incrementCountLength);
-
-  void _incrementCountLength(Null _) async {
+  late final incrementCountLength = createCommand((_) {
     if (isMaxCountLength) {
       return;
     }
-    // Simulate async operation
-    await Future.delayed(Duration(milliseconds: 300));
-    _countLength++;
-  }
+    countLengthState.value++;
+  });
 
-  SimpleControllerCommand<void, Null> get decrementCountLength =>
-      createCommand(_decrementCountLength);
-
-  void _decrementCountLength(Null _) async {
+  late final decrementCountLength = createCommand((_) {
     if (isMinCountLength) {
       return;
     }
-    // Simulate async operation
-    await Future.delayed(Duration(milliseconds: 300));
-    _countLength--;
-  }
+    countLengthState.value--;
+  });
 }
 
 class HomePageController extends SimpleController {
@@ -84,24 +61,24 @@ class HomePageController extends SimpleController {
   }) {
     addDependency(
       controller: mainAppController,
-      select: (value) => value.countLength,
-      listen: _mainAppControllerCountLengthListener,
+      select: (value) => value.countLengthState.value,
+      listen: (prev, next) {
+        countsState.value = List.generate(
+          next,
+          (i) => countsState.value.elementAtOrNull(i) ?? 0,
+        );
+      },
     );
   }
 
-  void _mainAppControllerCountLengthListener(int prev, int next) {
-    _counts = List.generate(next, (i) => _counts.elementAtOrNull(i) ?? 0);
-    notifyListeners();
-  }
+  late final countsState = createState(<int>[]);
 
-  List<int> _counts = [];
-  List<int> get counts => _counts;
-
-  SimpleControllerCommand<void, int> get increment => createCommand(_increment);
-
-  void _increment(int index) {
-    _counts[index]++;
-  }
+  late final increment = createCommand(
+    (int index) {
+      countsState.value[index]++;
+    },
+    debounce: const Duration(milliseconds: 100),
+  );
 }
 
 void main() {
@@ -115,22 +92,39 @@ class MainApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return SimpleControllerProvider.multi(
       providers: [
-        SimpleControllerProvider<EnvController>(
-          create: (context) => EnvController(),
+        SimpleControllerProvider<SettingController>(
+          create: (context) => SettingController(),
         ),
         SimpleControllerProvider<MainAppController>(
           create: (context) => MainAppController(
-            envController: context.use(),
+            settingController: context.use(),
           ),
         ),
       ],
-      child: MaterialApp(
-        home: SimpleControllerProvider(
-          create: (context) => HomePageController(
-            mainAppController: context.use(),
-          ),
-          child: HomePage(),
-        ),
+      child: Builder(
+        builder: (context) {
+          final settingController = context.use<SettingController>();
+
+          return settingController.build(
+            select: (value) => (
+              locale: value.localeState.value,
+              themeMode: value.themeModeState.value,
+            ),
+            builder: (context, value, child) => MaterialApp(
+              locale: value.locale,
+              themeMode: value.themeMode,
+              theme: ThemeData.light(),
+              darkTheme: ThemeData.dark(),
+              home: child,
+            ),
+            child: SimpleControllerProvider(
+              create: (context) => HomePageController(
+                mainAppController: context.use(),
+              ),
+              child: HomePage(),
+            ),
+          );
+        },
       ),
     );
   }
@@ -141,84 +135,40 @@ class HomePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final envController = context.use<EnvController>();
-    final mainAppController = context.use<MainAppController>();
-    final homePageController = context.use<HomePageController>();
+    final controller = context.use<HomePageController>();
 
     return Scaffold(
       appBar: AppBar(
         title: Text('Home'),
         actions: [
-          envController.build(
-            select: (value) => value.env,
-            builder: (context, env) {
-              return DropdownButton(
-                value: env,
-                items: [
-                  for (final value in Env.values)
-                    DropdownMenuItem(
-                      value: value,
-                      child: Text(value.name),
-                    ),
-                ],
-                onChanged: envController.updateEnv.execute,
-              );
-            },
-          ),
+          SettingWidget(),
           SizedBox(width: 8.0),
-          mainAppController.build(
-            select: (value) => value.isMinCountLength,
-            builder: (context, isMinCountLength) => mainAppController.build(
-              select: (value) => value.decrementCountLength.isExecuting,
-              builder: (context, isExecuting) => IconButton(
-                onPressed: isMinCountLength || isExecuting
-                    ? null
-                    : () {
-                        mainAppController.decrementCountLength.execute(null);
-                      },
-                icon: Icon(Icons.remove),
-              ),
-            ),
-          ),
-          SizedBox(width: 8.0),
-          mainAppController.build(
-            select: (value) => value.isMaxCountLength,
-            builder: (context, isMaxCountLength) => mainAppController.build(
-              select: (value) => value.incrementCountLength.isExecuting,
-              builder: (context, isExecuting) => IconButton(
-                onPressed: isMaxCountLength || isExecuting
-                    ? null
-                    : () {
-                        mainAppController.incrementCountLength.execute(null);
-                      },
-                icon: Icon(Icons.add),
-              ),
-            ),
-          ),
         ],
       ),
       body: Center(
-        child: homePageController.build(
-          select: (value) => value.counts.length,
-          builder: (context, length) => Column(
+        child: controller.build(
+          select: (value) => value.countsState.value.length,
+          builder: (context, length, child) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               for (var i = 0; i < length; i++) ...[
                 if (i > 0) const SizedBox(height: 8.0),
-                homePageController.build(
-                  select: (value) => value.counts.elementAtOrNull(i),
-                  builder: (context, value) {
+                controller.build(
+                  select: (value) => value.countsState.value.elementAtOrNull(i),
+                  builder: (context, value, child) {
                     return Text('count${i + 1}: $value');
                   },
                 ),
               ],
+              const SizedBox(height: 8.0),
+              MainWidget(),
             ],
           ),
         ),
       ),
-      floatingActionButton: homePageController.build(
-        select: (value) => value.counts.length,
-        builder: (context, length) {
+      floatingActionButton: controller.build(
+        select: (value) => value.countsState.value.length,
+        builder: (context, length, child) {
           return Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -226,7 +176,7 @@ class HomePage extends StatelessWidget {
                 if (i > 0) const SizedBox(height: 8.0),
                 FilledButton.icon(
                   onPressed: () {
-                    homePageController.increment.execute(i);
+                    controller.increment.execute(i);
                   },
                   icon: Icon(Icons.add),
                   label: Text('count${i + 1}'),
@@ -236,6 +186,104 @@ class HomePage extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+class SettingWidget extends StatelessWidget {
+  const SettingWidget({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = context.use<SettingController>();
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        controller.build(
+          select: (value) => value.themeModeState.value,
+          builder: (context, themeMode, child) {
+            return DropdownButton(
+              value: themeMode,
+              items: [
+                for (final value in ThemeMode.values)
+                  DropdownMenuItem(
+                    value: value,
+                    child: Text(value.name),
+                  ),
+              ],
+              onChanged: (value) {
+                if (value != null) {
+                  controller.themeModeState.value = value;
+                }
+              },
+            );
+          },
+        ),
+        SizedBox(width: 8.0),
+        controller.build(
+          select: (value) => value.envState.value,
+          builder: (context, env, child) {
+            return DropdownButton(
+              value: env,
+              items: [
+                for (final value in Env.values)
+                  DropdownMenuItem(
+                    value: value,
+                    child: Text(value.name),
+                  ),
+              ],
+              onChanged: (value) {
+                if (value != null) {
+                  controller.envState.value = value;
+                }
+              },
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class MainWidget extends StatelessWidget {
+  const MainWidget({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = context.use<MainAppController>();
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        controller.build(
+          select: (value) => value.isMinCountLength,
+          builder: (context, isMinCountLength, child) => controller.build(
+            select: (value) => value.decrementCountLength.isExecuting,
+            builder: (context, isExecuting, child) => IconButton(
+              onPressed: isMinCountLength || isExecuting
+                  ? null
+                  : () {
+                      controller.decrementCountLength.execute(null);
+                    },
+              icon: Icon(Icons.remove),
+            ),
+          ),
+        ),
+        SizedBox(width: 8.0),
+        controller.build(
+          select: (value) => value.isMaxCountLength,
+          builder: (context, isMaxCountLength, child) => controller.build(
+            select: (value) => value.incrementCountLength.isExecuting,
+            builder: (context, isExecuting, child) => IconButton(
+              onPressed: isMaxCountLength || isExecuting
+                  ? null
+                  : () {
+                      controller.incrementCountLength.execute(null);
+                    },
+              icon: Icon(Icons.add),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
