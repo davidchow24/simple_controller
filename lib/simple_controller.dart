@@ -261,15 +261,32 @@ class SimpleController extends ChangeNotifier {
 
   /// Create a [SimpleControllerState] with an initial state.
   @protected
-  SimpleControllerState<T> createState<T>(T initialState) {
+  SimpleControllerState<T> createState<T>(
+    T initialState, {
+    FutureOr<T> Function()? onInit,
+    void Function(T prev, T next)? listen,
+  }) {
     final key = UniqueKey();
 
     void setState(T value) {
-      _stateMap[key] = value;
+      final prev = _stateMap[key] as T;
+      final next = value;
+      _stateMap[key] = next;
       notifyListeners();
+      listen?.call(prev, value);
     }
 
-    _stateMap[key] = initialState;
+    if (onInit != null) {
+      final futureOr = onInit();
+      if (futureOr is Future<T>) {
+        _stateMap[key] = initialState;
+        futureOr.then(setState);
+      } else {
+        _stateMap[key] = futureOr;
+      }
+    } else {
+      _stateMap[key] = initialState;
+    }
 
     return SimpleControllerState<T>(
       getState: () => _stateMap[key] as T,

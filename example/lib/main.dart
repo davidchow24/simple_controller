@@ -11,7 +11,17 @@ enum Env {
 class SettingController extends SimpleController {
   late final localeState = createState(Locale('en', 'US'));
   late final themeModeState = createState(ThemeMode.system);
-  late final envState = createState(Env.dev);
+  late final envState = createState(
+    Env.dev,
+    listen: (prev, next) {
+      themeModeState.value = switch (next) {
+        Env.dev => ThemeMode.light,
+        Env.uat => ThemeMode.dark,
+        Env.stg => ThemeMode.system,
+        Env.prod => ThemeMode.system,
+      };
+    },
+  );
 }
 
 class MainAppController extends SimpleController {

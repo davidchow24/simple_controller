@@ -1,3 +1,7 @@
+## 1.5.0
+
+Add "listen" to "createState"
+
 ## 1.4.0
 
 Add "createState" to "SimpleController"
