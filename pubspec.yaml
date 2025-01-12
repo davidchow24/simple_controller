@@ -1,6 +1,6 @@
 name: simple_controller
 description: "A lightweight and efficient state management solution for Flutter applications."
-version: 1.5.0
+version: 1.6.0
 homepage: https://github.com/davidchow24/simple_controller
 
 environment:

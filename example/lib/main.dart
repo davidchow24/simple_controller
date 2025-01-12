@@ -1,102 +1,101 @@
+import 'dart:developer' as developer;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:simple_controller/simple_controller.dart';
 
 enum Env {
   dev,
-  uat,
-  stg,
   prod,
 }
 
 class SettingController extends SimpleController {
-  late final localeState = createState(Locale('en', 'US'));
+  final supportedLocales = [
+    const Locale('en', 'US'),
+    const Locale('fr', 'FR'),
+    const Locale('de', 'DE'),
+    const Locale('es', 'ES'),
+    const Locale('it', 'IT'),
+  ];
+
+  late final envState = createState(Env.dev);
+
   late final themeModeState = createState(ThemeMode.system);
-  late final envState = createState(
-    Env.dev,
-    listen: (prev, next) {
-      themeModeState.value = switch (next) {
-        Env.dev => ThemeMode.light,
-        Env.uat => ThemeMode.dark,
-        Env.stg => ThemeMode.system,
-        Env.prod => ThemeMode.system,
-      };
+
+  late final localeState = createState(supportedLocales.first);
+
+  late final counterToggleState = createState(false);
+
+  late final devInitialCountState = createState(999);
+
+  late final prodInitialCountState = createState(0);
+
+  late final initialCountState = createRefState(
+    (ref) {
+      final env = ref.watchState(envState);
+      if (env == Env.dev) {
+        return ref.watchState(devInitialCountState);
+      }
+      return ref.watchState(prodInitialCountState);
     },
   );
 }
 
-class MainAppController extends SimpleController {
-  MainAppController({
+class CounterController extends SimpleController {
+  CounterController({
     required SettingController settingController,
-  }) {
+  }) : _settingController = settingController {
     addDependency(
       controller: settingController,
-      select: (value) => value.envState.value,
+      select: (value) => value.initialCountState.value,
       listen: (prev, next) {
-        countLengthState.value = switch (next) {
-          Env.dev => 3,
-          Env.uat => 2,
-          Env.stg => 1,
-          Env.prod => 0,
-        };
+        final prevText = initialCountTextControllerState.value.text;
+        final nextText = '$next';
+        if (prevText != nextText) {
+          initialCountTextControllerState.value.text = nextText;
+        }
       },
     );
   }
 
-  late final countLengthState = createState(0);
+  final SettingController _settingController;
 
-  final int maxCountLength = 3;
-
-  bool get isMaxCountLength => countLengthState.value >= maxCountLength;
-
-  bool get isMinCountLength => countLengthState.value <= 0;
-
-  late final incrementCountLength = createCommand((_) {
-    if (isMaxCountLength) {
-      return;
-    }
-    countLengthState.value++;
-  });
-
-  late final decrementCountLength = createCommand((_) {
-    if (isMinCountLength) {
-      return;
-    }
-    countLengthState.value--;
-  });
-}
-
-class HomePageController extends SimpleController {
-  HomePageController({
-    required MainAppController mainAppController,
-  }) {
-    addDependency(
-      controller: mainAppController,
-      select: (value) => value.countLengthState.value,
-      listen: (prev, next) {
-        countsState.value = List.generate(
-          next,
-          (i) => countsState.value.elementAtOrNull(i) ?? 0,
-        );
-      },
-    );
-  }
-
-  late final countsState = createState(<int>[]);
-
-  late final increment = createCommand(
-    (int index) {
-      countsState.value[index]++;
+  late final initialCountTextControllerState = createState(
+    TextEditingController(
+      text: '${_settingController.initialCountState.value}',
+    ),
+    onDispose: (value) {
+      value.dispose();
     },
-    debounce: const Duration(milliseconds: 100),
   );
+
+  late final counterState = createRefState(
+    (ref) {
+      final initialCount = ref.watchState(_settingController.initialCountState);
+      return initialCount;
+    },
+  );
+
+  late final increment = createCommand((_) {
+    counterState.value++;
+  });
 }
 
 void main() {
-  runApp(const MainApp());
+  SimpleController.showLog = true;
+  SimpleController.showLogDetail = false;
+  SimpleController.log = (message) {
+    developer.log(
+      message,
+      name: 'simple_controller',
+    );
+  };
+  runApp(const MyApp());
 }
 
-class MainApp extends StatelessWidget {
-  const MainApp({super.key});
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -105,34 +104,32 @@ class MainApp extends StatelessWidget {
         SimpleControllerProvider<SettingController>(
           create: (context) => SettingController(),
         ),
-        SimpleControllerProvider<MainAppController>(
-          create: (context) => MainAppController(
-            settingController: context.use(),
-          ),
-        ),
       ],
       child: Builder(
         builder: (context) {
           final settingController = context.use<SettingController>();
-
           return settingController.build(
-            select: (value) => (
-              locale: value.localeState.value,
-              themeMode: value.themeModeState.value,
+            select: (settingController) => (
+              themeMode: settingController.themeModeState.value,
+              locale: settingController.localeState.value,
+              supportedLocales: settingController.supportedLocales,
             ),
-            builder: (context, value, child) => MaterialApp(
-              locale: value.locale,
-              themeMode: value.themeMode,
-              theme: ThemeData.light(),
-              darkTheme: ThemeData.dark(),
-              home: child,
-            ),
-            child: SimpleControllerProvider(
-              create: (context) => HomePageController(
-                mainAppController: context.use(),
-              ),
-              child: HomePage(),
-            ),
+            builder: (context, states, child) {
+              return MaterialApp(
+                themeMode: states.themeMode,
+                theme: ThemeData.light(),
+                darkTheme: ThemeData.dark(),
+                locale: states.locale,
+                supportedLocales: states.supportedLocales,
+                localizationsDelegates: const [
+                  GlobalMaterialLocalizations.delegate,
+                  GlobalWidgetsLocalizations.delegate,
+                  GlobalCupertinoLocalizations.delegate,
+                ],
+                home: child,
+              );
+            },
+            child: const HomePage(),
           );
         },
       ),
@@ -145,54 +142,213 @@ class HomePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final controller = context.use<HomePageController>();
-
+    final settingController = context.use<SettingController>();
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Home'),
-        actions: [
-          SettingWidget(),
-          SizedBox(width: 8.0),
-        ],
-      ),
       body: Center(
-        child: controller.build(
-          select: (value) => value.countsState.value.length,
-          builder: (context, length, child) => Column(
+        child: SingleChildScrollView(
+          child: Column(
+            spacing: 8.0,
             mainAxisSize: MainAxisSize.min,
             children: [
-              for (var i = 0; i < length; i++) ...[
-                if (i > 0) const SizedBox(height: 8.0),
-                controller.build(
-                  select: (value) => value.countsState.value.elementAtOrNull(i),
-                  builder: (context, value, child) {
-                    return Text('count${i + 1}: $value');
-                  },
-                ),
-              ],
-              const SizedBox(height: 8.0),
-              MainWidget(),
+              const EnvWidget(),
+              const ThemeModeWidget(),
+              const LocaleWidget(),
+              const EnvInitialCountWidget(),
+              const CounterToggleWidget(),
+              settingController.build(
+                select: (value) => value.counterToggleState.value,
+                builder: (context, value, child) {
+                  if (value) {
+                    return SimpleControllerProvider(
+                      create: (context) => CounterController(
+                        settingController: context.use(),
+                      ),
+                      child: const Column(
+                        spacing: 8.0,
+                        children: [
+                          InitialCountWidget(),
+                          CounterWidget(),
+                        ],
+                      ),
+                    );
+                  }
+                  return const SizedBox.shrink();
+                },
+              ),
             ],
           ),
         ),
       ),
-      floatingActionButton: controller.build(
-        select: (value) => value.countsState.value.length,
-        builder: (context, length, child) {
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (var i = 0; i < length; i++) ...[
-                if (i > 0) const SizedBox(height: 8.0),
-                FilledButton.icon(
-                  onPressed: () {
-                    controller.increment.execute(i);
-                  },
-                  icon: Icon(Icons.add),
-                  label: Text('count${i + 1}'),
-                ),
-              ],
-            ],
+    );
+  }
+}
+
+class EnvWidget extends StatelessWidget {
+  const EnvWidget({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final settingController = context.use<SettingController>();
+    return settingController.build(
+      select: (value) => value.envState.value,
+      builder: (context, value, child) {
+        return DropdownMenu(
+          initialSelection: value,
+          dropdownMenuEntries: [
+            for (final env in Env.values)
+              DropdownMenuEntry(
+                value: env,
+                label: '$env',
+              ),
+          ],
+          onSelected: (env) {
+            if (env != null) {
+              settingController.envState.value = env;
+            }
+          },
+        );
+      },
+    );
+  }
+}
+
+class ThemeModeWidget extends StatelessWidget {
+  const ThemeModeWidget({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final settingController = context.use<SettingController>();
+    return settingController.build(
+      select: (value) => value.themeModeState.value,
+      builder: (context, value, child) {
+        return DropdownMenu(
+          initialSelection: value,
+          dropdownMenuEntries: [
+            for (final themeMode in ThemeMode.values)
+              DropdownMenuEntry(
+                value: themeMode,
+                label: '$themeMode',
+              ),
+          ],
+          onSelected: (themeMode) {
+            if (themeMode != null) {
+              settingController.themeModeState.value = themeMode;
+            }
+          },
+        );
+      },
+    );
+  }
+}
+
+class LocaleWidget extends StatelessWidget {
+  const LocaleWidget({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final settingController = context.use<SettingController>();
+    return settingController.build(
+      select: (value) => (
+        locale: value.localeState.value,
+        supportedLocales: value.supportedLocales,
+      ),
+      builder: (context, states, child) {
+        return DropdownMenu(
+          initialSelection: states.locale,
+          dropdownMenuEntries: [
+            for (final locale in states.supportedLocales)
+              DropdownMenuEntry(
+                value: locale,
+                label: '$locale',
+              ),
+          ],
+          onSelected: (locale) {
+            if (locale != null) {
+              settingController.localeState.value = locale;
+            }
+          },
+        );
+      },
+    );
+  }
+}
+
+class EnvInitialCountWidget extends StatelessWidget {
+  const EnvInitialCountWidget({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final settingController = context.use<SettingController>();
+
+    return Column(
+      spacing: 8.0,
+      children: [
+        settingController.build(
+          select: (value) => (
+            prodInitialCount: value.prodInitialCountState.value,
+            devInitialCount: value.devInitialCountState.value,
+          ),
+          builder: (context, value, child) {
+            return Text(
+              'Initial Count\n'
+              '${Env.prod}: ${value.prodInitialCount}\n'
+              '${Env.dev}: ${value.devInitialCount}',
+              textAlign: TextAlign.center,
+            );
+          },
+        ),
+        FilledButton.icon(
+          onPressed: () {
+            settingController.prodInitialCountState.value++;
+          },
+          icon: const Icon(Icons.add),
+          label: const Text('Increment Prod'),
+        ),
+        FilledButton.icon(
+          onPressed: () {
+            settingController.prodInitialCountState.value--;
+          },
+          icon: const Icon(Icons.remove),
+          label: const Text('Decrement Prod'),
+        ),
+        FilledButton.icon(
+          onPressed: () {
+            settingController.devInitialCountState.value++;
+          },
+          icon: const Icon(Icons.add),
+          label: const Text('Increment Dev'),
+        ),
+        FilledButton.icon(
+          onPressed: () {
+            settingController.devInitialCountState.value--;
+          },
+          icon: const Icon(Icons.remove),
+          label: const Text('Decrement Dev'),
+        ),
+      ],
+    );
+  }
+}
+
+class CounterToggleWidget extends StatelessWidget {
+  const CounterToggleWidget({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final settingController = context.use<SettingController>();
+    return ConstrainedBox(
+      constraints: const BoxConstraints(
+        maxWidth: 300,
+      ),
+      child: settingController.build(
+        select: (value) => value.counterToggleState.value,
+        builder: (context, value, child) {
+          return SwitchListTile(
+            value: value,
+            onChanged: (value) {
+              settingController.counterToggleState.value = value;
+            },
+            title: const Text('Counter Toggle'),
           );
         },
       ),
@@ -200,98 +356,66 @@ class HomePage extends StatelessWidget {
   }
 }
 
-class SettingWidget extends StatelessWidget {
-  const SettingWidget({super.key});
+class InitialCountWidget extends StatelessWidget {
+  const InitialCountWidget({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final controller = context.use<SettingController>();
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        controller.build(
-          select: (value) => value.themeModeState.value,
-          builder: (context, themeMode, child) {
-            return DropdownButton(
-              value: themeMode,
-              items: [
-                for (final value in ThemeMode.values)
-                  DropdownMenuItem(
-                    value: value,
-                    child: Text(value.name),
-                  ),
-              ],
-              onChanged: (value) {
-                if (value != null) {
-                  controller.themeModeState.value = value;
-                }
-              },
-            );
+    final counterController = context.use<CounterController>();
+    return counterController.build(
+      select: (value) => value.initialCountTextControllerState.value,
+      builder: (context, value, child) {
+        return TextFormField(
+          controller: value,
+          onChanged: (value) {
+            final parsedValue = int.tryParse(value);
+            if (parsedValue != null) {
+              final settingController = context.use<SettingController>();
+              settingController.initialCountState.value = parsedValue;
+            }
           },
-        ),
-        SizedBox(width: 8.0),
-        controller.build(
-          select: (value) => value.envState.value,
-          builder: (context, env, child) {
-            return DropdownButton(
-              value: env,
-              items: [
-                for (final value in Env.values)
-                  DropdownMenuItem(
-                    value: value,
-                    child: Text(value.name),
-                  ),
-              ],
-              onChanged: (value) {
-                if (value != null) {
-                  controller.envState.value = value;
-                }
-              },
-            );
-          },
-        ),
-      ],
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(
+            labelText: 'Initial Count',
+            border: OutlineInputBorder(),
+            constraints: BoxConstraints(
+              maxWidth: 132,
+            ),
+          ),
+          inputFormatters: [
+            FilteringTextInputFormatter.digitsOnly,
+          ],
+        );
+      },
     );
   }
 }
 
-class MainWidget extends StatelessWidget {
-  const MainWidget({super.key});
+class CounterWidget extends StatelessWidget {
+  const CounterWidget({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final controller = context.use<MainAppController>();
-    return Row(
-      mainAxisSize: MainAxisSize.min,
+    final counterController = context.use<CounterController>();
+    return Column(
+      spacing: 4.0,
       children: [
-        controller.build(
-          select: (value) => value.isMinCountLength,
-          builder: (context, isMinCountLength, child) => controller.build(
-            select: (value) => value.decrementCountLength.isExecuting,
-            builder: (context, isExecuting, child) => IconButton(
-              onPressed: isMinCountLength || isExecuting
-                  ? null
-                  : () {
-                      controller.decrementCountLength.execute(null);
-                    },
-              icon: Icon(Icons.remove),
-            ),
-          ),
+        const Text(
+          'You have pushed the button this many times:',
+          textAlign: TextAlign.center,
         ),
-        SizedBox(width: 8.0),
-        controller.build(
-          select: (value) => value.isMaxCountLength,
-          builder: (context, isMaxCountLength, child) => controller.build(
-            select: (value) => value.incrementCountLength.isExecuting,
-            builder: (context, isExecuting, child) => IconButton(
-              onPressed: isMaxCountLength || isExecuting
-                  ? null
-                  : () {
-                      controller.incrementCountLength.execute(null);
-                    },
-              icon: Icon(Icons.add),
-            ),
-          ),
+        counterController.build(
+          select: (value) => value.counterState.value,
+          builder: (context, value, child) {
+            return Text('$value');
+          },
+        ),
+        FilledButton.icon(
+          onPressed: () {
+            counterController.increment.execute(null);
+          },
+          icon: const Icon(Icons.add),
+          label: const Text('Increment'),
         ),
       ],
     );

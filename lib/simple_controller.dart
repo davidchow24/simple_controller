@@ -1,6 +1,35 @@
+import 'dart:developer' as developer;
 import 'dart:async';
 
 import 'package:flutter/widgets.dart';
+
+void _log({
+  required _LogType type,
+  required String message,
+  required String debugLabel,
+}) {
+  if (SimpleController.showLog) {
+    SimpleController.log(
+      [
+        if (SimpleController.showLogDetail)
+          '[${DateTime.now().toIso8601String()}]',
+        '[${type.typeName}]',
+        '[${debugLabel}]',
+        if (SimpleController.showLogDetail) '[${message}]',
+      ].join(' '),
+    );
+  }
+}
+
+enum _LogType {
+  init,
+  change,
+  dispose,
+}
+
+extension _LogTypeExtension on _LogType {
+  String get typeName => this.toString().split('.').last.toUpperCase();
+}
 
 /// [BuildContext] extension to use [SimpleController].
 extension SimpleControllerBuildContextExtension on BuildContext {
@@ -24,7 +53,7 @@ extension SimpleSimpleControllerExtension<N extends SimpleController> on N {
     Function(S prev, S next)? listen,
     Widget? child,
   }) {
-    return _SimpleControllerSelector(
+    return _SimpleControllerSelectorWidget(
       controller: this,
       select: select,
       listen: listen,
@@ -34,30 +63,117 @@ extension SimpleSimpleControllerExtension<N extends SimpleController> on N {
   }
 }
 
-class SimpleControllerState<T> {
-  const SimpleControllerState({
-    required T Function() getState,
-    required SimpleControllerCommand<void, T> setState,
-  })  : _getState = getState,
+/// A reference class that holds a [SimpleControllerState] and a [setState] function.
+class SimpleControllerStateRef<T> {
+  SimpleControllerStateRef({
+    required SimpleControllerState<T> state,
+    required void Function(T value) setState,
+  })  : _state = state,
         _setState = setState;
 
-  final T Function() _getState;
+  final SimpleControllerState<T> _state;
+  final void Function(T value) _setState;
+
+  final List<SimpleControllerState> _dependencies = [];
+
+  void _dispose() {
+    for (final dependency in _dependencies) {
+      dependency._removeListener(_listener);
+    }
+    _dependencies.clear();
+  }
+
+  void _listener() async {
+    final onInit = _state._onInit;
+    if (onInit != null) {
+      final futureOr = onInit(this);
+      if (futureOr is Future<T>) {
+        final value = await futureOr;
+        _setState(value);
+      } else {
+        _setState(futureOr);
+      }
+    }
+  }
+
+  /// Watch a [SimpleControllerState] and return its value.
+  S watchState<S>(SimpleControllerState<S> state) {
+    _dependencies.add(state);
+    state._addListener(_listener);
+    return state.value;
+  }
+}
+
+/// A state class that holds a [SimpleControllerStateRef] and a [setState] function.
+class SimpleControllerState<T> {
+  SimpleControllerState._({
+    required String debugLabel,
+    required FutureOr<T> Function(SimpleControllerStateRef<T> ref)? onInit,
+    required Object? Function() getState,
+    required SimpleControllerCommand<void, T> setState,
+    required void Function(T value)? onDispose,
+  })  : _debugLabel = debugLabel,
+        _onInitCallback = onInit,
+        _getState = getState,
+        _setState = setState,
+        _onDispose = onDispose;
+
+  final FutureOr<T> Function(SimpleControllerStateRef<T> ref)? _onInitCallback;
+
+  final void Function(T value)? _onDispose;
+
+  final Object? Function() _getState;
 
   final SimpleControllerCommand<void, T> _setState;
 
-  T get value => _getState();
+  final String _debugLabel;
+
+  void _dispose() {
+    final onDispose = _onDispose;
+    if (onDispose != null) {
+      _log(
+        type: _LogType.dispose,
+        message: '',
+        debugLabel: _debugLabel,
+      );
+      onDispose(value);
+    }
+  }
+
+  FutureOr<T> Function(SimpleControllerStateRef<T> ref)? get _onInit {
+    final onInit = _onInitCallback;
+    return onInit != null
+        ? (SimpleControllerStateRef<T> ref) {
+            return onInit(ref);
+          }
+        : null;
+  }
+
+  void _setValue(T value) {
+    _setState.execute(value);
+    for (final listener in _listeners) {
+      listener();
+    }
+  }
+
+  T get value => _getState() as T;
 
   set value(T value) {
-    _setState.execute(value);
+    _setValue(value);
   }
 
-  bool operator ==(Object other) {
-    if (identical(this, other)) return true;
-    return other is SimpleControllerState<T> && other.value == value;
+  final List<void Function()> _listeners = [];
+
+  void _addListener(void Function() listener) {
+    if (_listeners.contains(listener)) {
+      return;
+    }
+    _listeners.add(listener);
   }
 
-  @override
-  int get hashCode => value.hashCode;
+  void _removeListener(void Function() listener) {
+    _listeners.remove(listener);
+  }
 }
 
 /// A dependency class that holds a controller, a selector function, a listener function,
@@ -251,50 +367,192 @@ class SimpleControllerCommand<Output, Input> {
 /// to changes in their selected values. It maintains a list of states, each representing a dependency
 /// and its associated listener.
 class SimpleController extends ChangeNotifier {
+  /// Whether to show log messages.
+  static bool showLog = false;
+
+  /// Whether to show log details.
+  static bool showLogDetail = false;
+
+  /// The log function to use.
+  static void Function(String message) log = (String message) {
+    developer.log(
+      message,
+      name: 'simple_controller',
+    );
+  };
+
   final List<_SimpleControllerDependencyState> _dependencyStates = [];
 
   final Map<String, int> _executingCountMap = {};
   final Map<String, int> _debounceCountMap = {};
   final Map<String, int> _throttleCountMap = {};
 
-  final Map<Key, Object?> _stateMap = {};
+  final Map<Key, Object?> _stateValueMap = {};
+  final Map<Key, SimpleControllerState> _stateMap = {};
+  final Map<Key, SimpleControllerStateRef> _stateRefMap = {};
 
-  /// Create a [SimpleControllerState] with an initial state.
-  @protected
-  SimpleControllerState<T> createState<T>(
-    T initialState, {
-    FutureOr<T> Function()? onInit,
-    void Function(T prev, T next)? listen,
+  SimpleControllerState<T> _baseCreateState<T>({
+    required String? debugLabel,
+    T? initialState,
+    required FutureOr<T> Function(SimpleControllerStateRef<T> ref)? onInit,
+    required void Function(T value)? onDispose,
+    required void Function(T prev, T next)? listen,
   }) {
     final key = UniqueKey();
 
-    void setState(T value) {
-      final prev = _stateMap[key] as T;
-      final next = value;
-      _stateMap[key] = next;
-      notifyListeners();
-      listen?.call(prev, value);
+    var currentDebugLabel = debugLabel ?? key.hashCode.toString();
+    if (SimpleController.showLog && debugLabel == null) {
+      final stackTrace = StackTrace.current;
+      final frames = stackTrace.toString().split('\n');
+      final index = frames.indexWhere(
+        (frame) =>
+            frame.contains('SimpleController.createState') ||
+            frame.contains('SimpleController.createRefState'),
+      );
+      if (index > -1 && index + 1 < frames.length) {
+        final frame = frames[index + 1];
+        final regex = RegExp(r'#\d+\s+(.+)\s+.+$');
+        final match = regex.firstMatch(frame);
+        if (match != null) {
+          final frameLabel = match.group(1);
+          if (frameLabel != null) {
+            currentDebugLabel = frameLabel;
+          }
+        }
+      }
     }
 
-    if (onInit != null) {
-      final futureOr = onInit();
+    final currentOnDispose = onDispose;
+
+    void setState(T value) {
+      final prev = _stateValueMap[key] as T;
+      final next = value;
+      if (prev != next) {
+        _log(
+          type: _LogType.change,
+          message: '$prev -> $next',
+          debugLabel: currentDebugLabel,
+        );
+        _stateValueMap[key] = next;
+        notifyListeners();
+        listen?.call(prev, value);
+        if (currentOnDispose != null) {
+          _log(
+            type: _LogType.dispose,
+            message: '',
+            debugLabel: currentDebugLabel,
+          );
+          currentOnDispose(prev);
+        }
+      }
+    }
+
+    final state = SimpleControllerState<T>._(
+      onInit: onInit,
+      getState: () => _stateValueMap[key],
+      setState: createCommand(setState),
+      onDispose: currentOnDispose,
+      debugLabel: currentDebugLabel,
+    );
+
+    _stateMap[key] = state;
+
+    final stateOnInit = state._onInit;
+    final stateSetValue = state._setValue;
+
+    if (stateOnInit != null) {
+      final stateRef = SimpleControllerStateRef<T>(
+        state: state,
+        setState: stateSetValue,
+      );
+      _stateRefMap[key] = stateRef;
+      final futureOr = stateOnInit(stateRef);
       if (futureOr is Future<T>) {
-        _stateMap[key] = initialState;
-        futureOr.then(setState);
+        _stateValueMap[key] = initialState;
+        futureOr.then(stateSetValue);
       } else {
-        _stateMap[key] = futureOr;
+        _stateValueMap[key] = futureOr;
       }
     } else {
-      _stateMap[key] = initialState;
+      _stateValueMap[key] = initialState;
     }
 
-    return SimpleControllerState<T>(
-      getState: () => _stateMap[key] as T,
-      setState: createCommand(setState),
+    _log(
+      type: _LogType.init,
+      message: '${_stateValueMap[key]}',
+      debugLabel: currentDebugLabel,
+    );
+
+    return state;
+  }
+
+  @protected
+
+  /// Create a [SimpleControllerState] with a reference to other states.
+  ///
+  /// The [onInit] function is called when the state is created and must return a value of type [T].
+  /// The [onInit] function receives a [SimpleControllerStateRef] that can be used to watch other states.
+  ///
+  /// The [debugLabel] is used for logging purposes.
+  ///
+  /// The [onDispose] function is called when the state is disposed.
+  ///
+  /// The [listen] function is called when the state changes.
+  @protected
+  SimpleControllerState<T> createRefState<T>(
+    T Function(SimpleControllerStateRef<T> ref) onInit, {
+    String? debugLabel,
+    void Function(T value)? onDispose,
+    void Function(T prev, T next)? listen,
+  }) {
+    return _baseCreateState(
+      debugLabel: debugLabel,
+      onInit: onInit,
+      onDispose: onDispose,
+      listen: listen,
+    );
+  }
+
+  /// Create a [SimpleControllerState] with an initial value.
+  ///
+  /// The [initialState] is the initial value of the state.
+  ///
+  /// The [onInit] function is called when the state is created and can optionally return a new value of type [T].
+  /// The [onInit] function receives a [SimpleControllerStateRef] that can be used to watch other states.
+  ///
+  /// The [debugLabel] is used for logging purposes.
+  ///
+  /// The [onDispose] function is called when the state is disposed.
+  ///
+  /// The [listen] function is called when the state changes.
+  @protected
+  SimpleControllerState<T> createState<T>(
+    T initialState, {
+    String? debugLabel,
+    FutureOr<T> Function(SimpleControllerStateRef<T> ref)? onInit,
+    void Function(T value)? onDispose,
+    void Function(T prev, T next)? listen,
+  }) {
+    return _baseCreateState(
+      debugLabel: debugLabel,
+      initialState: initialState,
+      onInit: onInit,
+      onDispose: onDispose,
+      listen: listen,
     );
   }
 
   /// Create a [SimpleControllerCommand] with a callback function.
+  ///
+  /// The [callback] function is called when the command is executed.
+  ///
+  /// The [key] is used to identify the command in the debounce and throttle.
+  ///
+  /// The [debounce] is the debounce duration.
+  ///
+  /// The [throttle] is the throttle duration.
+  ///
+  /// The [skipIfExecuting] is whether to skip the command if it is already executing.
   @protected
   SimpleControllerCommand<Output, Input> createCommand<Output, Input>(
     FutureOr<Output> Function(Input) callback, {
@@ -317,6 +575,14 @@ class SimpleController extends ChangeNotifier {
   }
 
   /// Add a dependency to the controller.
+  ///
+  /// The [controller] is the controller to watch.
+  ///
+  /// The [select] function is used to select the value from the controller.
+  ///
+  /// The [listen] function is called when the value changes.
+  ///
+  /// The [fireImmediately] is whether to fire the listener immediately.
   @protected
   void addDependency<T, N extends SimpleController>({
     required N controller,
@@ -361,15 +627,28 @@ class SimpleController extends ChangeNotifier {
   /// Remove a dependency from the controller.
   @override
   void dispose() {
+    for (final state in _stateMap.values) {
+      state._dispose();
+    }
+    for (final stateRef in _stateRefMap.values) {
+      stateRef._dispose();
+    }
     for (var i = 0; i < _dependencyStates.length; i++) {
       final state = _dependencyStates[i];
       state.dependency.controller.removeListener(state.listener);
     }
+    _stateRefMap.clear();
+    _stateValueMap.clear();
+    _stateMap.clear();
+    _dependencyStates.clear();
+    _executingCountMap.clear();
+    _debounceCountMap.clear();
+    _throttleCountMap.clear();
     super.dispose();
   }
 }
 
-/// [SimpleControllerProvider] is a widget that provides a [SimpleController] to its children.
+/// A provider widget that provides a [SimpleController] to its children.
 class SimpleControllerProvider<N extends SimpleController>
     extends StatefulWidget {
   const SimpleControllerProvider({
@@ -379,6 +658,10 @@ class SimpleControllerProvider<N extends SimpleController>
   }) : super(key: key);
 
   /// Create a [SimpleControllerProvider] widget that provides a [SimpleController] to its children.
+  ///
+  /// The [providers] is a list of [SimpleControllerProvider] widgets to wrap.
+  ///
+  /// The [child] is the child widget to wrap with the [SimpleController].
   static Widget multi({
     required List<SimpleControllerProvider> providers,
     required Widget child,
@@ -434,9 +717,9 @@ class _SimpleControllerProviderState<N extends SimpleController>
   }
 }
 
-class _SimpleControllerSelector<T, N extends SimpleController>
+class _SimpleControllerSelectorWidget<T, N extends SimpleController>
     extends StatefulWidget {
-  const _SimpleControllerSelector({
+  const _SimpleControllerSelectorWidget({
     required this.controller,
     required this.select,
     required this.builder,
@@ -452,12 +735,12 @@ class _SimpleControllerSelector<T, N extends SimpleController>
   final Widget? child;
 
   @override
-  State<_SimpleControllerSelector<T, N>> createState() =>
-      _SimpleControllerSelectorState<T, N>();
+  State<_SimpleControllerSelectorWidget<T, N>> createState() =>
+      _SimpleControllerSelectorWidgetState<T, N>();
 }
 
-class _SimpleControllerSelectorState<T, N extends SimpleController>
-    extends State<_SimpleControllerSelector<T, N>> {
+class _SimpleControllerSelectorWidgetState<T, N extends SimpleController>
+    extends State<_SimpleControllerSelectorWidget<T, N>> {
   late T _value = widget.select(widget.controller);
 
   @override

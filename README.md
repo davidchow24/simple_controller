@@ -22,6 +22,10 @@ A controller class that extends ChangeNotifier to manage dependencies and notify
 
 A method to create a reactive state variable. It initializes the state with a given value and provides a way to listen for changes. This state can be used within the controller to manage and update the UI efficiently.
 
+##### createRefState
+
+A method to create a reactive state variable. It initializes the state with a given value and provides a way to listen for changes. This state can be used within the controller to manage and update the UI efficiently.
+
 ##### createCommand
 
 A method to create a command that encapsulates a piece of logic or an action. It can be executed with one parameter and supports features like debouncing. Commands help in organizing and reusing logic within the controller.
@@ -108,22 +112,19 @@ class SettingController extends SimpleController {
 class MainAppController extends SimpleController {
   MainAppController({
     required SettingController settingController,
-  }) {
-    addDependency(
-      controller: settingController,
-      select: (value) => value.envState.value,
-      listen: (prev, next) {
-        countLengthState.value = switch (next) {
-          Env.dev => 3,
-          Env.uat => 2,
-          Env.stg => 1,
-          Env.prod => 0,
-        };
-      },
-    );
-  }
+  }) : _settingController = settingController;
 
-  late final countLengthState = createState(0);
+  late final SettingController _settingController;
+
+  late final countLengthState = createRefState((ref) {
+    final env = ref.watchState(_settingController.envState);
+    return switch (env) {
+      Env.dev => 3,
+      Env.uat => 2,
+      Env.stg => 1,
+      Env.prod => 0,
+    };
+  });
 
   final int maxCountLength = 3;
 
@@ -149,20 +150,14 @@ class MainAppController extends SimpleController {
 class HomePageController extends SimpleController {
   HomePageController({
     required MainAppController mainAppController,
-  }) {
-    addDependency(
-      controller: mainAppController,
-      select: (value) => value.countLengthState.value,
-      listen: (prev, next) {
-        countsState.value = List.generate(
-          next,
-          (i) => countsState.value.elementAtOrNull(i) ?? 0,
-        );
-      },
-    );
-  }
+  }) : _mainAppController = mainAppController;
 
-  late final countsState = createState(<int>[]);
+  late final MainAppController _mainAppController;
+
+  late final countsState = createRefState((ref) {
+    final countLength = ref.watchState(_mainAppController.countLengthState);
+    return List.generate(countLength, (i) => 0);
+  });
 
   late final increment = createCommand(
     (int index) {
